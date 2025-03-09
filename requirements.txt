@@ -3,4 +3,5 @@ python-dotenv
 customtkinter
 pygame
 pillow
-darkdetect 
+darkdetect
+pyinstaller 

@@ -1,7 +1,7 @@
 import customtkinter as ctk
 from openai import OpenAI
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from pathlib import Path
 import pygame
 import json
@@ -10,66 +10,137 @@ import darkdetect
 from tkinter import filedialog
 import threading
 
+class APIKeyDialog(ctk.CTkToplevel):
+    def __init__(self):
+        super().__init__()
+        
+        # Configure window
+        self.title("OpenAI API Key Setup")
+        self.geometry("400x200")
+        
+        # Center the window
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
+        
+        # Make it modal
+        self.transient(self.master)
+        self.grab_set()
+        
+        # Add widgets
+        self.label = ctk.CTkLabel(self, text="Please enter your OpenAI API key:", font=ctk.CTkFont(size=14))
+        self.label.pack(pady=(20, 10))
+        
+        self.api_key = ctk.CTkEntry(self, width=300, show="•")
+        self.api_key.pack(pady=10)
+        
+        self.show_key = ctk.CTkCheckBox(self, text="Show API Key", command=self.toggle_key_visibility)
+        self.show_key.pack(pady=10)
+        
+        self.submit_button = ctk.CTkButton(self, text="Save API Key", command=self.save_key)
+        self.submit_button.pack(pady=10)
+        
+        self.result = None
+    
+    def toggle_key_visibility(self):
+        self.api_key.configure(show="" if self.show_key.get() else "•")
+    
+    def save_key(self):
+        self.result = self.api_key.get()
+        self.destroy()
+
 class CyberNinjaGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # Initialize OpenAI and audio
-        load_dotenv()
-        self.client = OpenAI()
-        self.setup_audio_directory()
+        # Initialize paths and settings
+        self.setup_paths()
+        if not self.check_api_key():
+            self.get_api_key()
+        self.initialize_client()
         pygame.mixer.init()
-        
-        # Load or create settings
         self.settings_file = Path(__file__).parent / "settings.json"
         self.load_settings()
         
         # Configure window
         self.title("Cyber Ninja AI Assistant")
-        self.geometry("1000x700")
+        self.geometry("1200x800")  # Larger default size
         
-        # Configure grid layout
+        # Configure grid layout with better spacing
         self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=3)  # Give more weight to chat area
         
-        # Create sidebar frame
-        self.sidebar = ctk.CTkScrollableFrame(self, width=250, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, rowspan=2, sticky="nsew")
+        # Create sidebar with better styling
+        self.sidebar = ctk.CTkScrollableFrame(
+            self,
+            width=300,  # Wider sidebar
+            corner_radius=10,
+            fg_color="transparent"
+        )
+        self.sidebar.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         
-        # Personality settings in sidebar
-        self.create_sidebar_widgets()
+        # Create main content area with better organization
+        self.main_content = ctk.CTkFrame(self, corner_radius=10, fg_color="transparent")
+        self.main_content.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.main_content.grid_rowconfigure(0, weight=1)
+        self.main_content.grid_columnconfigure(0, weight=1)
         
-        # Create main chat frame
-        self.chat_frame = ctk.CTkFrame(self)
-        self.chat_frame.grid(row=0, column=1, padx=(20, 20), pady=(20, 0), sticky="nsew")
+        # Create header frame for API key button
+        self.header_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        self.header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.create_menu()
+        
+        # Create chat frame with better styling
+        self.chat_frame = ctk.CTkFrame(self.main_content, corner_radius=10)
+        self.chat_frame.grid(row=1, column=0, sticky="nsew")
         self.chat_frame.grid_rowconfigure(0, weight=1)
         self.chat_frame.grid_columnconfigure(0, weight=1)
         
-        # Create chat display
-        self.chat_display = ctk.CTkTextbox(self.chat_frame, width=400, height=300)
-        self.chat_display.grid(row=0, column=0, padx=20, pady=(20, 0), sticky="nsew")
+        # Create chat display with better styling
+        self.chat_display = ctk.CTkTextbox(
+            self.chat_frame,
+            corner_radius=10,
+            font=ctk.CTkFont(size=13)
+        )
+        self.chat_display.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         self.chat_display.configure(state="disabled")
         
-        # Create input frame
-        self.input_frame = ctk.CTkFrame(self)
-        self.input_frame.grid(row=1, column=1, padx=(20, 20), pady=(20, 20), sticky="ew")
+        # Create input area with better styling
+        self.input_frame = ctk.CTkFrame(self.main_content, corner_radius=10)
+        self.input_frame.grid(row=2, column=0, sticky="ew", pady=(20, 0))
         self.input_frame.grid_columnconfigure(0, weight=1)
         
-        # Create chat input
-        self.chat_input = ctk.CTkEntry(self.input_frame, placeholder_text="Type your message here...")
+        # Chat input with better styling
+        self.chat_input = ctk.CTkEntry(
+            self.input_frame,
+            placeholder_text="Type your message here...",
+            height=40,
+            font=ctk.CTkFont(size=13)
+        )
         self.chat_input.grid(row=0, column=0, padx=(20, 10), pady=20, sticky="ew")
         self.chat_input.bind("<Return>", self.send_message)
         
-        # Create send button
-        self.send_button = ctk.CTkButton(self.input_frame, text="Send", width=100, command=self.send_message)
-        self.send_button.grid(row=0, column=1, padx=(10, 20), pady=20)
+        # Send button with better styling
+        self.send_button = ctk.CTkButton(
+            self.input_frame,
+            text="Send",
+            width=100,
+            height=40,
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.send_button.grid(row=0, column=1, padx=(0, 20), pady=20)
+        self.send_button.configure(command=self.send_message)
         
-        # Audio player frame
-        self.player_frame = ctk.CTkFrame(self.input_frame)
-        self.player_frame.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
-        
-        # Audio controls
+        # Audio player with better styling
+        self.player_frame = ctk.CTkFrame(self.main_content, corner_radius=10)
+        self.player_frame.grid(row=3, column=0, sticky="ew", pady=(20, 0))
         self.create_audio_controls()
+        
+        # Create sidebar content with better organization
+        self.create_sidebar_widgets()
         
         # Initialize state
         self.current_audio = None
@@ -79,40 +150,76 @@ class CyberNinjaGUI(ctk.CTk):
         # Welcome message
         self.append_message("Cyber Ninja AI: Welcome, user. I am your cyber ninja assistant. How may I assist you today?")
         
-        # Apply initial theme
+        # Apply theme
         self.apply_theme()
     
+    def setup_paths(self):
+        self.base_dir = Path(__file__).parent.absolute()
+        self.output_dir = self.base_dir / "audio"
+        self.env_file = self.base_dir / ".env"
+        self.output_dir.mkdir(exist_ok=True)
+    
+    def check_api_key(self):
+        load_dotenv(self.env_file)
+        return bool(os.getenv("OPENAI_API_KEY"))
+    
+    def get_api_key(self):
+        dialog = APIKeyDialog()
+        self.wait_window(dialog)
+        if dialog.result:
+            # Save to .env file
+            with open(self.env_file, "w") as f:
+                f.write(f"OPENAI_API_KEY={dialog.result}")
+            os.environ["OPENAI_API_KEY"] = dialog.result
+        else:
+            self.quit()
+    
+    def initialize_client(self):
+        load_dotenv(self.env_file)
+        self.client = OpenAI()
+    
+    def create_menu(self):
+        self.api_button = ctk.CTkButton(
+            self.header_frame,
+            text="Change API Key",
+            width=120,
+            height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color="transparent",
+            border_width=1
+        )
+        self.api_button.pack(side="right", padx=10)
+        self.api_button.configure(command=self.change_api_key)
+    
+    def change_api_key(self):
+        dialog = APIKeyDialog()
+        self.wait_window(dialog)
+        if dialog.result:
+            # Update .env file
+            with open(self.env_file, "w") as f:
+                f.write(f"OPENAI_API_KEY={dialog.result}")
+            os.environ["OPENAI_API_KEY"] = dialog.result
+            self.initialize_client()
+            self.append_message("Cyber Ninja AI: API key updated successfully!")
+    
     def create_sidebar_widgets(self):
-        # Theme selection
-        self.theme_label = ctk.CTkLabel(self.sidebar, text="Theme Settings", font=ctk.CTkFont(size=20, weight="bold"))
-        self.theme_label.grid(row=0, column=0, padx=20, pady=(20, 10))
-        
+        # Theme settings with better styling
+        self.create_section_header("Theme Settings", 0)
         themes = ["System", "Dark", "Light"]
-        self.theme_option = ctk.CTkOptionMenu(self.sidebar, values=themes, command=self.change_theme)
-        self.theme_option.grid(row=1, column=0, padx=20, pady=(0, 10))
+        self.theme_option = self.create_dropdown(themes, self.change_theme, 1)
         self.theme_option.set(self.settings["theme"])
         
-        # Voice settings
-        self.voice_label = ctk.CTkLabel(self.sidebar, text="Voice Settings", font=ctk.CTkFont(size=20, weight="bold"))
-        self.voice_label.grid(row=2, column=0, padx=20, pady=(20, 10))
-        
-        # Voice selection
-        self.voice_option = ctk.CTkOptionMenu(self.sidebar, values=["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
-                                            command=self.change_voice)
-        self.voice_option.grid(row=3, column=0, padx=20, pady=(0, 10))
+        # Voice settings with better styling
+        self.create_section_header("Voice Settings", 2)
+        voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        self.voice_option = self.create_dropdown(voices, self.change_voice, 3)
         self.voice_option.set(self.settings["voice"])
         
-        # Voice speed
-        self.speed_label = ctk.CTkLabel(self.sidebar, text="Voice Speed")
-        self.speed_label.grid(row=4, column=0, padx=20, pady=(10, 0))
-        self.speed_slider = ctk.CTkSlider(self.sidebar, from_=0.5, to=2.0, command=self.update_voice_speed)
-        self.speed_slider.grid(row=5, column=0, padx=20, pady=(0, 10))
-        self.speed_slider.set(self.settings["voice_speed"])
+        # Voice speed with better styling
+        self.create_slider_with_label("Voice Speed", 4, "voice_speed", 0.5, 2.0)
         
-        # Personality traits
-        self.personality_label = ctk.CTkLabel(self.sidebar, text="Personality Traits", font=ctk.CTkFont(size=20, weight="bold"))
-        self.personality_label.grid(row=6, column=0, padx=20, pady=(20, 10))
-        
+        # Personality traits with better styling
+        self.create_section_header("Personality Traits", 6)
         traits = [
             ("Formality", "formality"),
             ("Tech Level", "tech_level"),
@@ -123,40 +230,127 @@ class CyberNinjaGUI(ctk.CTk):
         ]
         
         for i, (label, key) in enumerate(traits):
-            self.create_personality_slider(label, key, 7 + i*2)
+            self.create_slider_with_label(label, 7 + i*2, key, 0, 1)
         
-        # Custom prompt editor
-        self.prompt_label = ctk.CTkLabel(self.sidebar, text="Custom System Prompt", font=ctk.CTkFont(size=20, weight="bold"))
-        self.prompt_label.grid(row=19, column=0, padx=20, pady=(20, 10))
-        
-        self.prompt_editor = ctk.CTkTextbox(self.sidebar, height=100)
-        self.prompt_editor.grid(row=20, column=0, padx=20, pady=(0, 10))
+        # Custom prompt with better styling
+        self.create_section_header("Custom System Prompt", 19)
+        self.prompt_editor = ctk.CTkTextbox(
+            self.sidebar,
+            height=100,
+            font=ctk.CTkFont(size=12)
+        )
+        self.prompt_editor.grid(row=20, column=0, padx=20, pady=(0, 20), sticky="ew")
         self.prompt_editor.insert("1.0", self.settings["custom_prompt"])
         
-        # Chat history controls
-        self.history_frame = ctk.CTkFrame(self.sidebar)
-        self.history_frame.grid(row=21, column=0, padx=20, pady=(20, 10))
+        # Chat controls with better styling
+        self.create_section_header("Chat Controls", 21)
+        self.create_chat_controls(22)
         
-        self.save_history_button = ctk.CTkButton(self.history_frame, text="Save Chat", command=self.save_chat_history)
-        self.save_history_button.grid(row=0, column=0, padx=5, pady=5)
+        # Save settings with better styling
+        self.save_button = ctk.CTkButton(
+            self.sidebar,
+            text="Save Settings",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            height=40
+        )
+        self.save_button.grid(row=23, column=0, padx=20, pady=(20, 20), sticky="ew")
+        self.save_button.configure(command=self.save_settings)
+    
+    def create_section_header(self, text, row):
+        label = ctk.CTkLabel(
+            self.sidebar,
+            text=text,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        label.grid(row=row, column=0, padx=20, pady=(20, 10), sticky="w")
+    
+    def create_dropdown(self, values, command, row):
+        dropdown = ctk.CTkOptionMenu(
+            self.sidebar,
+            values=values,
+            command=command,
+            font=ctk.CTkFont(size=13),
+            height=32
+        )
+        dropdown.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
+        return dropdown
+    
+    def create_slider_with_label(self, label_text, row, key, min_val, max_val):
+        label = ctk.CTkLabel(
+            self.sidebar,
+            text=label_text,
+            font=ctk.CTkFont(size=13)
+        )
+        label.grid(row=row, column=0, padx=20, pady=(10, 0), sticky="w")
         
-        self.load_history_button = ctk.CTkButton(self.history_frame, text="Load Chat", command=self.load_chat_history)
-        self.load_history_button.grid(row=0, column=1, padx=5, pady=5)
+        slider = ctk.CTkSlider(
+            self.sidebar,
+            from_=min_val,
+            to=max_val,
+            command=lambda value, k=key: self.update_personality(k, value)
+        )
+        slider.grid(row=row+1, column=0, padx=20, pady=(5, 10), sticky="ew")
+        slider.set(self.settings[key])
+    
+    def create_chat_controls(self, row):
+        control_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        control_frame.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
         
-        # Save settings button
-        self.save_button = ctk.CTkButton(self.sidebar, text="Save Settings", command=self.save_settings)
-        self.save_button.grid(row=22, column=0, padx=20, pady=(20, 10))
+        save_btn = ctk.CTkButton(
+            control_frame,
+            text="Save Chat",
+            font=ctk.CTkFont(size=13),
+            height=32,
+            command=self.save_chat_history
+        )
+        save_btn.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
+        
+        load_btn = ctk.CTkButton(
+            control_frame,
+            text="Load Chat",
+            font=ctk.CTkFont(size=13),
+            height=32,
+            command=self.load_chat_history
+        )
+        load_btn.grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
+        control_frame.grid_columnconfigure(0, weight=1)
+        control_frame.grid_columnconfigure(1, weight=1)
     
     def create_audio_controls(self):
-        self.play_button = ctk.CTkButton(self.player_frame, text="▶", width=40, command=self.toggle_audio)
-        self.play_button.grid(row=0, column=0, padx=5, pady=5)
+        # Play button with better styling
+        self.play_button = ctk.CTkButton(
+            self.player_frame,
+            text="▶",
+            width=40,
+            height=40,
+            font=ctk.CTkFont(size=16)
+        )
+        self.play_button.grid(row=0, column=0, padx=(20, 5), pady=20)
+        self.play_button.configure(command=self.toggle_audio)
         
-        self.stop_button = ctk.CTkButton(self.player_frame, text="⏹", width=40, command=self.stop_audio)
-        self.stop_button.grid(row=0, column=1, padx=5, pady=5)
+        # Stop button with better styling
+        self.stop_button = ctk.CTkButton(
+            self.player_frame,
+            text="⏹",
+            width=40,
+            height=40,
+            font=ctk.CTkFont(size=16)
+        )
+        self.stop_button.grid(row=0, column=1, padx=5, pady=20)
+        self.stop_button.configure(command=self.stop_audio)
         
-        self.volume_slider = ctk.CTkSlider(self.player_frame, from_=0, to=1, command=self.update_volume)
-        self.volume_slider.grid(row=0, column=2, padx=20, pady=5)
+        # Volume slider with better styling
+        self.volume_slider = ctk.CTkSlider(
+            self.player_frame,
+            from_=0,
+            to=1,
+            command=self.update_volume,
+            width=200
+        )
+        self.volume_slider.grid(row=0, column=2, padx=(20, 20), pady=20, sticky="ew")
         self.volume_slider.set(self.settings["volume"])
+        
+        self.player_frame.grid_columnconfigure(2, weight=1)
     
     def load_settings(self):
         default_settings = {
@@ -186,14 +380,6 @@ class CyberNinjaGUI(ctk.CTk):
         self.settings["custom_prompt"] = self.prompt_editor.get("1.0", "end-1c")
         with open(self.settings_file, 'w') as f:
             json.dump(self.settings, f)
-    
-    def create_personality_slider(self, label_text, personality_key, row):
-        label = ctk.CTkLabel(self.sidebar, text=label_text)
-        label.grid(row=row, column=0, padx=20, pady=(10, 0))
-        
-        slider = ctk.CTkSlider(self.sidebar, from_=0, to=1, command=lambda value, key=personality_key: self.update_personality(key, value))
-        slider.grid(row=row+1, column=0, padx=20, pady=(0, 10))
-        slider.set(self.settings[personality_key])
     
     def update_personality(self, key, value):
         self.settings[key] = value
@@ -342,11 +528,6 @@ class CyberNinjaGUI(ctk.CTk):
             pygame.mixer.music.stop()
             self.is_playing = False
             self.play_button.configure(text="▶")
-    
-    def setup_audio_directory(self):
-        self.output_dir = Path(__file__).parent / "audio"
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True, exist_ok=True)
 
 if __name__ == "__main__":
     app = CyberNinjaGUI()
